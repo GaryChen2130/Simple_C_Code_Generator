@@ -5,15 +5,17 @@
 #include <stdbool.h>
 #include <string.h>
 
-int local_cnt[10];
+int local_cnt;
 int error_num;
 int func_flag;
+int id_flag;
 int declare_line;
 extern int yylineno;
 extern int yylex();
 extern char *yytext;   // Get current token from lex
 char *error_msg;
 char *buff_tmp;
+char *id_buff;
 extern char buf[256];  // Get current code line from lex
 
 FILE *file;
@@ -42,6 +44,7 @@ typedef struct entry{
 	float float_const;
 	char *str_const;
 	int asgn_flag;
+	int reg_num;
 
 } Entry;
 
@@ -54,6 +57,8 @@ void Print_Table(int);
 void Change_Table_Flag(char *);
 int Remove_Redundant();
 int Check_Table();
+Entry *Get_Entry(char *);
+char *Check_Casting(char *,char *);
 
 %}
 
@@ -87,7 +92,8 @@ int Check_Table();
 %type <string> func_def declaration declaration_specs declarator 
 %type <string> parameter_list parameter_declaration
 %type <string> init_declarator_list init_declarator
-%type <string> postfix_expression primary_expression
+%type <string> add_expression mul_expression
+%type <string> unary_expression postfix_expression primary_expression
 %type <string> id_var
 
 /* Yacc will start at this nonterminal */
@@ -166,15 +172,15 @@ declaration_specs
 ;
 
 declarator 
-    : ID														{$$ = strdup(yytext); strcpy(table_head -> name, yytext);}
-    | LB declarator RB											{;}
-    | declarator LB enter_scope parameter_list RB leave_scope	{
-								    								$$ = strcat(strcat($1,"|"), $4);
-								    								func_flag = 1;
-								    								declare_line = yylineno;
-																}
+    : ID																	{$$ = strdup(yytext); strcpy(table_head -> name, yytext);}
+    | LB declarator RB														{;}
+    | declarator LB enter_scope reset_local parameter_list RB leave_scope	{
+								    											$$ = strcat(strcat($1,"|"), $5);
+								    											func_flag = 1;
+								    											declare_line = yylineno;
+																			}
     | declarator LB id_list RB	{;}
-    | declarator LB RB			{$$ = $1; func_flag = 1; declare_line = yylineno;}
+    | declarator LB reset_local RB	{$$ = $1; func_flag = 1; declare_line = yylineno;}
 ;
 
 declaration_list 
@@ -186,7 +192,14 @@ compound_stat
     : LCB enter_scope RCB leave_scope
     | LCB enter_scope block_item_list RCB leave_scope
 ;
-enter_scope : {++(table_head -> scope_level); local_cnt[table_head -> scope_level] = 0; func_flag = 0; /*printf("%d\n",table_head -> scope_level);*/}
+
+reset_local :	{local_cnt = 0; }
+
+enter_scope :	{
+					++(table_head -> scope_level);
+					func_flag = 0; 
+					/*printf("%d\n",table_head -> scope_level);*/
+				}
 leave_scope : {--(table_head -> scope_level); }
 
 block_item_list
@@ -253,11 +266,11 @@ declaration
 																	else{ // Local Variable
 																		if(!(table_head -> asgn_flag)){ // Without Initialize
 																			if(!strcmp(table_head -> value_type,"float")){
-																				fprintf(file, "\tldc 0\n\tfstore %d\n",local_cnt[table_head -> scope_level]++);
+																				fprintf(file, "    ldc 0\n    fstore %d\n",local_cnt++);
 																				table_head -> float_const = 0;
 																			}
 																			else{
-																				fprintf(file, "\tldc 0\n\tistore %d\n",local_cnt[table_head -> scope_level]++);
+																				fprintf(file, "    ldc 0\n    istore %d\n",local_cnt++);
 																				table_head -> int_const = 0;
 																			}
 																		}
@@ -266,15 +279,15 @@ declaration
 																			if((!strcmp($1,"int")) || (!strcmp($1,"bool"))){
 																				if(!strcmp(table_head -> value_type,"F"))
 																					table_head -> int_const = table_head -> float_const;
-																				fprintf(file, "\tldc %d\n\tistore %d\n",table_head -> int_const,local_cnt[table_head -> scope_level]++);
+																				fprintf(file, "    ldc %d\n    istore %d\n",table_head -> int_const,local_cnt++);
 																			}
 																			else if(!strcmp($1,"float")){
 																				if(!strcmp(table_head -> value_type,"I"))
 																					table_head -> float_const = table_head -> int_const;
-																				fprintf(file, "\tldc %f\n\tfstore %d\n",table_head -> float_const,local_cnt[table_head -> scope_level]++);
+																				fprintf(file, "    ldc %f\n    fstore %d\n",table_head -> float_const,local_cnt++);
 																			}
 																			else if(!strcmp($1,"string"))
-																				fprintf(file, "\tldc \"%s\"\n\tistore %d\n",table_head -> str_const,local_cnt[table_head -> scope_level]++);
+																				fprintf(file, "    ldc \"%s\"\n    istore %d\n",table_head -> str_const,local_cnt++);
 																			
 																			table_head -> asgn_flag = 0;
 																		}
@@ -358,8 +371,13 @@ loop_stat
 jump_stat 
     : CONT SEMICOLON
     | BREAK SEMICOLON
-    | RET SEMICOLON				{fprintf(file, "\treturn\n");}
-    | RET expression SEMICOLON  {fprintf(file, "\treturn value\n");}
+    | RET SEMICOLON				{fprintf(file, "    return\n");}
+    | RET expression SEMICOLON  {
+									if(!strcmp(table_head -> value_type,"F"))
+										fprintf(file, "    freturn\n");
+									else
+										fprintf(file, "    ireturn\n");
+								}
 ;
 
 expression 
@@ -369,7 +387,9 @@ expression
 
 assign_expression 
     : logical_or_expression
-    | unary_expression assign_op assign_expression
+    | unary_expression assign_op assign_expression	{ 
+														strcpy(id_buff,$1); 
+												  	} store_var
 ;
 
 logical_or_expression 
@@ -397,30 +417,40 @@ relation_expression
 ;
 
 add_expression 
-    : mul_expression
-    | add_expression ADD mul_expression
-    | add_expression SUB mul_expression
+    : mul_expression					{ $$ = $1; }
+    | add_expression ADD mul_expression	{ $$ = strdup(Check_Casting($1,$3)); if(!strcmp($$,"I")){fprintf(file,"    iadd\n");}else{fprintf(file,"    fadd\n");} }
+    | add_expression SUB mul_expression	{ $$ = strdup(Check_Casting($1,$3)); if(!strcmp($$,"I")){fprintf(file,"    isub\n");}else{fprintf(file,"    fsub\n");} }
 ;
 
 mul_expression 
-    : unary_expression
-    | mul_expression MUL unary_expression
-    | mul_expression DIV unary_expression
-    | mul_expression MOD unary_expression
+    : unary_expression								{	if(id_flag){strcpy(id_buff,$1);} } load_const load_var { $$ = $1; }
+    | mul_expression MUL unary_expression			{	if(id_flag){strcpy(id_buff,$3);} } load_const load_var { $$ = strdup(Check_Casting($1,$3)); if(!strcmp($$,"I")){fprintf(file,"    imul\n");}else{fprintf(file,"    fmul\n");} }
+    | mul_expression DIV unary_expression			{	if(id_flag){strcpy(id_buff,$3);} } load_const load_var { $$ = strdup(Check_Casting($1,$3)); if(!strcmp($$,"I")){fprintf(file,"    idiv\n");}else{fprintf(file,"    fdiv\n");} }
+    | mul_expression MOD unary_expression			{	if(id_flag){strcpy(id_buff,$3);} } load_const load_var { $$ = strdup(Check_Casting($1,$3)); if(!strcmp($$,"I")){fprintf(file,"    imod\n");}else{/*error*/} }
 ;
 
 unary_expression 
-    : postfix_expression
-    | INC unary_expression
-    | DEC unary_expression
-    | unary_op unary_expression
+    : postfix_expression							{	$$ = $1; }
+    | INC unary_expression 							{	strcpy(id_buff,$2); } load_var { $$ = $2; }
+    | DEC unary_expression 							{	strcpy(id_buff,$2); } load_var { $$ = $2; }
+    | unary_op unary_expression						{	if(id_flag){strcpy(id_buff,$2);} } load_const load_var { $$ = $2; }
 ;
 
 postfix_expression 
-    : primary_expression							{$$ = $1;}
-    | postfix_expression LSB expression RSB
-    | postfix_expression LB RB
-    | postfix_expression LB argv_expression_list RB	{	if(lookup_symbol($1) < 0){
+    : primary_expression							{	if(id_flag){$$ = $1;}else{ $$ = strdup(table_head -> value_type);} }
+    | postfix_expression LSB expression RSB			{	$$ = $1; }
+    | postfix_expression LB RB						{	$$ = $1;
+														if(lookup_symbol($1) < 0){
+															error_num = 1;
+															if(error_msg == NULL)
+																error_msg = strdup("Undeclared function ");
+															else
+																strcpy(error_msg, "Undeclared function ");
+															strcat(error_msg,$1);
+														}
+													}
+    | postfix_expression LB argv_expression_list RB	{	$$ = $1;
+														if(lookup_symbol($1) < 0){
 							  								error_num = 1;
 															if(error_msg == NULL)
 																error_msg = strdup("Undeclared function ");
@@ -429,13 +459,46 @@ postfix_expression
 															strcat(error_msg,$1);
 							  							}
 													}
-    | postfix_expression INC
-    | postfix_expression DEC
+    | postfix_expression INC 						{	strcpy(id_buff,$1); }	load_var	{$$ = $1;}
+    | postfix_expression DEC 						{	strcpy(id_buff,$1); }	load_var	{$$ = $1;}
 ;
+
+load_const:	{	if(!id_flag && (table_head -> scope_level > 0)){
+					if(!strcmp(table_head -> value_type,"F"))
+						fprintf(file,"    ldc %f\n",table_head -> float_const);
+					else if(!strcmp(table_head -> value_type,"Ljava/lang/String"))
+						fprintf(file,"    ldc %s\n",table_head -> str_const);
+					else
+						fprintf(file,"    ldc %d\n",table_head -> int_const);
+				}
+			}
+
+load_var:	{	if(id_flag){
+					Entry *entry = Get_Entry(id_buff);//printf("%s\n",id_buff);
+					if(entry -> scope_level == 0)
+						fprintf(file,"    getstatic compiler_hw3/%s %s\n",entry -> name,table_head -> value_type);
+					else if(!strcmp(entry -> data_type,"float"))
+						fprintf(file,"    fload %d\n",entry -> reg_num);
+					else
+						fprintf(file,"    iload %d\n",entry -> reg_num);
+				}
+				id_flag = 0;
+			}
+
+store_var:	{
+				Entry *entry = Get_Entry(id_buff);
+				if(entry -> scope_level == 0)
+					fprintf(file,"    putstatic compiler_hw3/%s %s\n",entry -> name,table_head -> value_type);
+				else if(!strcmp(entry -> data_type,"float"))
+					fprintf(file,"    tfstore %d\n",entry -> reg_num);
+				else
+					fprintf(file,"    istore %d\n",entry -> reg_num);
+			}
 
 primary_expression 
     : ID	{
 				$$ = strdup(yytext);
+				id_flag = 1;
     			if(lookup_symbol(yytext) < 0){
 					error_num = 2;
 					if(error_msg == NULL)
@@ -444,6 +507,20 @@ primary_expression
 						strcpy(error_msg, "Undeclared variable ");
 					strcat(error_msg,yytext);
 				}
+
+				Entry *entry = Get_Entry(yytext);
+				char *type = strdup(entry -> data_type);
+				if(!strcmp(type,"int"))
+					strcpy(table_head -> value_type,"I");
+				else if(!strcmp(type,"float"))
+					strcpy(table_head -> value_type,"F");
+				else if(!strcmp(type,"bool"))
+					strcpy(table_head -> value_type,"Z");
+				else if(!strcmp(type,"string"))
+					strcpy(table_head -> value_type,"Ljava/lang/String");
+				else if(!strcmp(type,"void"))
+					strcpy(table_head -> value_type,"V");
+
 			}
     | I_CONST	{strcpy(table_head -> value_type, "I"); table_head -> int_const = atoi(yytext); }
     | F_CONST	{strcpy(table_head -> value_type, "F"); sscanf(yytext,"%f",&(table_head -> float_const)); }
@@ -526,12 +603,14 @@ type
 int main(int argc, char** argv)
 {
     yylineno = 0;
-	memset(local_cnt,0,sizeof(local_cnt));
+	local_cnt = 0;
     error_num = 0;
     func_flag = 0;
     declare_line = 0;
     error_msg = NULL;
     buff_tmp = NULL;
+	id_buff = strdup("");
+	id_flag = 0;
     syntax_error_flag = 0;
 
 	file = fopen("compiler_hw3.j","w");
@@ -625,6 +704,8 @@ void insert_symbol(char *symbol_name, char *entry_name, char *data_name, int ffd
 			new_entry -> str_const = strdup(table_head -> str_const);
 	}
 
+	new_entry -> reg_num = local_cnt - 1;
+
 	Insert_Entry(&table_head, new_entry);
 
 }
@@ -672,6 +753,41 @@ void dump_symbol() {
            "Index", "Name", "Kind", "Type", "Scope", "Attribute");
 }
 
+Entry *Get_Entry(char *id){
+	
+	Entry *cur;
+	char *name;
+
+	// Search in the same scope first
+	cur = table_head;
+	cur = cur -> next;
+	while(cur != NULL){
+		name = strdup(cur -> name);
+		strcpy(name, strtok(name, "|"));
+		if((!strcmp(id, name)) && (cur -> scope_level == table_head -> scope_level))
+			break;
+		cur = cur -> next;
+	}
+
+	if(cur != NULL)
+		return cur;
+
+	// Search in all scopes
+	cur = table_head;
+	cur = cur -> next;
+	while(cur != NULL){
+		name = strdup(cur -> name);
+		strcpy(name, strtok(name, "|"));
+		if(!strcmp(id, name)){
+			return cur;	
+		}
+		cur = cur -> next;
+	}
+
+	return NULL;
+
+}
+
 
 void Insert_Entry(Entry **head, Entry *new_entry){
 	head = &((*head) -> next);
@@ -701,6 +817,47 @@ Entry *Remove_Entry(){
 	}
 
 	return NULL;
+
+}
+
+char *Check_Casting(char *id1,char *id2){
+
+	Entry *e1 = Get_Entry(id1);
+	Entry *e2 = Get_Entry(id2);
+	char *type1,*type2,*str;
+
+	if(e1 == NULL){
+		if(!strcmp(id1,"F"))
+			type1 = strdup("float");
+		else
+			type1 = strdup("int");
+	}
+	else
+		type1 = strdup(e1 -> data_type);
+
+	if(e2 == NULL){
+		if(!strcmp(id2,"F"))
+			type2 = strdup("float");
+		else
+			type2 = strdup("int");
+	}
+	else
+		type2 = strdup(e2 -> data_type);
+
+	if(!strcmp(type1,"float") && (!strcmp(type2,"int"))){
+		fprintf(file,"    swap\n");
+		fprintf(file,"    i2f\n");
+		str = strdup("F");
+		return str;
+	}
+	else if(!strcmp(type1,"int") && (!strcmp(type2,"float"))){
+		fprintf(file,"    i2f\n");
+		str = strdup("F");
+		return str;
+	}
+
+	str = strdup("I");
+	return str;
 
 }
 
