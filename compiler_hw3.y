@@ -9,6 +9,7 @@ int local_cnt;
 int error_num;
 int func_flag;
 int id_flag;
+int op_flag;
 int declare_line;
 extern int yylineno;
 extern int yylex();
@@ -265,7 +266,7 @@ declaration
 																	}
 																	else{ // Local Variable
 																		if(!(table_head -> asgn_flag)){ // Without Initialize
-																			if(!strcmp(table_head -> value_type,"float")){
+																			if(!strcmp($1,"float")){
 																				fprintf(file, "    ldc 0\n    fstore %d\n",local_cnt++);
 																				table_head -> float_const = 0;
 																			}
@@ -279,15 +280,15 @@ declaration
 																			if((!strcmp($1,"int")) || (!strcmp($1,"bool"))){
 																				if(!strcmp(table_head -> value_type,"F"))
 																					table_head -> int_const = table_head -> float_const;
-																				fprintf(file, "    ldc %d\n    istore %d\n",table_head -> int_const,local_cnt++);
+																				fprintf(file, "    istore %d\n",local_cnt++);
 																			}
 																			else if(!strcmp($1,"float")){
 																				if(!strcmp(table_head -> value_type,"I"))
 																					table_head -> float_const = table_head -> int_const;
-																				fprintf(file, "    ldc %f\n    fstore %d\n",table_head -> float_const,local_cnt++);
+																				fprintf(file, "    fstore %d\n",local_cnt++);
 																			}
 																			else if(!strcmp($1,"string"))
-																				fprintf(file, "    ldc \"%s\"\n    istore %d\n",table_head -> str_const,local_cnt++);
+																				fprintf(file, "    istore %d\n",local_cnt++);
 																			
 																			table_head -> asgn_flag = 0;
 																		}
@@ -338,16 +339,37 @@ stat
 
 print_stat 
     : PRINT LB QUATA STR_CONST QUATA RB SEMICOLON
-    | PRINT LB id_var RB SEMICOLON	{
-    									if(lookup_symbol($3) < 0){
-											error_num = 2;
-											if(error_msg == NULL)
-												error_msg = strdup("Undeclared variable ");
-											else
-												strcpy(error_msg, "Undeclared variable ");
-											strcat(error_msg,$3);
-										}
-									}
+    | PRINT LB primary_expression RB SEMICOLON		{
+    													if(id_flag && (lookup_symbol($3) < 0)){
+															error_num = 2;
+															if(error_msg == NULL)
+																error_msg = strdup("Undeclared variable ");
+															else
+																strcpy(error_msg, "Undeclared variable ");
+															strcat(error_msg,$3);
+														}
+
+														if(id_flag){
+															Entry *entry = Get_Entry($3);
+															if(entry -> scope_level == 0)
+																fprintf(file,"    getstatic compiler_hw3/%s %s\n",entry -> name,table_head -> value_type);
+															else if(!strcmp(entry -> data_type,"float"))
+																fprintf(file,"    fload %d\n",entry -> reg_num);
+															else
+																fprintf(file,"    iload %d\n",entry -> reg_num);
+														}
+														else if((!strcmp(table_head -> value_type,"I")) || (!strcmp(table_head -> value_type,"Z")))
+															fprintf(file,"    ldc %d\n",table_head -> int_const);
+														else if(!strcmp(table_head -> value_type,"F"))
+															fprintf(file,"    ldc %f\n",table_head -> float_const);
+														else if(!strcmp(table_head -> value_type,"Ljava/lang/String"))
+															fprintf(file,"    ldc %s\n",table_head -> str_const);
+
+														fprintf(file,"    getstatic java/lang/System/out Ljava/io/PrintStream;\n");
+														fprintf(file,"    swap\n");
+														fprintf(file,"    invokevirtual java/io/PrintStream/println(%s)V\n",table_head -> value_type);
+
+													}
 ;
 
 id_var 
@@ -387,9 +409,9 @@ expression
 
 assign_expression 
     : logical_or_expression
-    | unary_expression assign_op assign_expression	{ 
-														strcpy(id_buff,$1); 
-												  	} store_var
+    | unary_expression {id_flag = 0;} assign_op assign_expression	{ // For casting 
+																		strcpy(id_buff,$1); 
+												  					} store_var
 ;
 
 logical_or_expression 
@@ -431,13 +453,13 @@ mul_expression
 
 unary_expression 
     : postfix_expression							{	$$ = $1; }
-    | INC unary_expression 							{	strcpy(id_buff,$2); } load_var { $$ = $2; }
-    | DEC unary_expression 							{	strcpy(id_buff,$2); } load_var { $$ = $2; }
+    | INC unary_expression	 						{	strcpy(id_buff,$2); op_flag = 1; } load_var { $$ = $2; }
+    | DEC unary_expression 							{	strcpy(id_buff,$2); op_flag = 1; } load_var { $$ = $2; }
     | unary_op unary_expression						{	if(id_flag){strcpy(id_buff,$2);} } load_const load_var { $$ = $2; }
 ;
 
 postfix_expression 
-    : primary_expression							{	if(id_flag){$$ = $1;}else{ $$ = strdup(table_head -> value_type);} }
+    : primary_expression							{	if(id_flag){$$ = $1; }else{ $$ = strdup(table_head -> value_type);} }
     | postfix_expression LSB expression RSB			{	$$ = $1; }
     | postfix_expression LB RB						{	$$ = $1;
 														if(lookup_symbol($1) < 0){
@@ -458,24 +480,53 @@ postfix_expression
 																strcpy(error_msg, "Undeclared function ");
 															strcat(error_msg,$1);
 							  							}
+														id_flag = 1;
 													}
     | postfix_expression INC 						{	strcpy(id_buff,$1); }	load_var	{$$ = $1;}
     | postfix_expression DEC 						{	strcpy(id_buff,$1); }	load_var	{$$ = $1;}
 ;
 
-load_const:	{	if(!id_flag && (table_head -> scope_level > 0)){
+load_const:	{	if(!id_flag && !op_flag && (table_head -> scope_level > 0)){
 					if(!strcmp(table_head -> value_type,"F"))
 						fprintf(file,"    ldc %f\n",table_head -> float_const);
 					else if(!strcmp(table_head -> value_type,"Ljava/lang/String"))
-						fprintf(file,"    ldc %s\n",table_head -> str_const);
+						fprintf(file,"    ldc \"%s\"\n",table_head -> str_const);
 					else
 						fprintf(file,"    ldc %d\n",table_head -> int_const);
 				}
+				op_flag = 0;
 			}
 
 load_var:	{	if(id_flag){
 					Entry *entry = Get_Entry(id_buff);//printf("%s\n",id_buff);
-					if(entry -> scope_level == 0)
+					if(!strcmp(entry -> entry_type,"function")){
+						char *str = strdup(entry -> name),*tmp;
+						fprintf(file,"    invokestatic compiler_hw3/%s(",strtok(str,"|"));
+						while((tmp = strtok(NULL,", ")) != NULL){
+							if(!strcmp(tmp,"int"))
+								fprintf(file,"I");
+							else if(!strcmp(tmp,"float"))
+								fprintf(file,"F");
+							else if(!strcmp(tmp,"bool"))
+								fprintf(file,"Z");
+							else if(!strcmp(tmp,"string"))
+								fprintf(file,"Ljava/lang/String");	
+						}
+
+						tmp = strdup(entry -> data_type);
+						if(!strcmp(tmp,"int"))
+							fprintf(file,")I\n");
+						else if(!strcmp(tmp,"float"))
+							fprintf(file,")F\n");
+						else if(!strcmp(tmp,"bool"))
+							fprintf(file,")Z\n");
+						else if(!strcmp(tmp,"string"))
+							fprintf(file,")Ljava/lang/String\n");	
+						else if(!strcmp(tmp,"void"))
+							fprintf(file,")V\n");
+
+					}
+					else if(entry -> scope_level == 0)
 						fprintf(file,"    getstatic compiler_hw3/%s %s\n",entry -> name,table_head -> value_type);
 					else if(!strcmp(entry -> data_type,"float"))
 						fprintf(file,"    fload %d\n",entry -> reg_num);
@@ -496,7 +547,7 @@ store_var:	{
 			}
 
 primary_expression 
-    : ID	{
+    : ID	{	
 				$$ = strdup(yytext);
 				id_flag = 1;
     			if(lookup_symbol(yytext) < 0){
@@ -522,11 +573,11 @@ primary_expression
 					strcpy(table_head -> value_type,"V");
 
 			}
-    | I_CONST	{strcpy(table_head -> value_type, "I"); table_head -> int_const = atoi(yytext); }
-    | F_CONST	{strcpy(table_head -> value_type, "F"); sscanf(yytext,"%f",&(table_head -> float_const)); }
-    | QUATA STR_CONST {strcpy(table_head -> value_type, "Ljava/lang/String"); strcpy(table_head -> str_const, yytext);} QUATA
-    | TRUE		{strcpy(table_head -> value_type, "Z"); table_head -> int_const = 1;}
-    | FALSE		{strcpy(table_head -> value_type, "Z"); table_head -> int_const = 0;}
+    | I_CONST	{strcpy(table_head -> value_type, "I"); table_head -> int_const = atoi(yytext); id_flag = 0; }
+    | F_CONST	{strcpy(table_head -> value_type, "F"); sscanf(yytext,"%f",&(table_head -> float_const)); id_flag = 0; }
+    | QUATA STR_CONST {strcpy(table_head -> value_type, "Ljava/lang/String"); strcpy(table_head -> str_const, yytext); id_flag = 0; } QUATA
+    | TRUE		{strcpy(table_head -> value_type, "Z"); table_head -> int_const = 1; id_flag = 0; }
+    | FALSE		{strcpy(table_head -> value_type, "Z"); table_head -> int_const = 0; id_flag = 0; }
     | LB expression RB	{;}
 ;
 
@@ -537,13 +588,14 @@ parameter_list
 
 parameter_declaration 
     : declaration_specs declarator	{	$$ = $1;
+										local_cnt++;
 					  					insert_symbol($2, "parameter", $1, 0);
                                     }
     | declaration_specs			
 ;
 
 argv_expression_list 
-    : assign_expression
+    : assign_expression								
     | argv_expression_list COMMA assign_expression
 ;
 
@@ -606,6 +658,7 @@ int main(int argc, char** argv)
 	local_cnt = 0;
     error_num = 0;
     func_flag = 0;
+	op_flag = 0;
     declare_line = 0;
     error_msg = NULL;
     buff_tmp = NULL;
