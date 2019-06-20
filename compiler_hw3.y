@@ -17,6 +17,7 @@ extern char *yytext;   // Get current token from lex
 char *error_msg;
 char *buff_tmp;
 char *id_buff;
+static char *cast_type;
 extern char buf[256];  // Get current code line from lex
 
 FILE *file;
@@ -59,7 +60,8 @@ void Change_Table_Flag(char *);
 int Remove_Redundant();
 int Check_Table();
 Entry *Get_Entry(char *);
-char *Check_Casting(char *,char *);
+void Casting(char *,char *);
+void *Check_Casting(char *,char *,char *);
 
 %}
 
@@ -78,7 +80,6 @@ char *Check_Casting(char *,char *);
 %token SEMICOLON RET CONT BREAK
 %token ADD SUB MUL DIV MOD INC DEC
 %token MT LT MTE LTE EQ NE
-%token ASGN ADDASGN SUBASGN MULASGN DIVASGN MODASGN
 %token AND OR NOT LB RB LCB RCB LSB RSB COMMA QUATA
 
 /* Token with return, which need to sepcify type */
@@ -87,14 +88,18 @@ char *Check_Casting(char *,char *);
 %token <string> STR_CONST
 %token <string> ID
 %token <string> STRING INT FLOAT BOOL VOID TRUE FALSE
+%token <string> ASGN ADDASGN SUBASGN MULASGN DIVASGN MODASGN
 
 /* Nonterminal with return, which need to sepcify type */
 %type <string> type
 %type <string> func_def declaration declaration_specs declarator 
 %type <string> parameter_list parameter_declaration
 %type <string> init_declarator_list init_declarator
+%type <string> assign_expression logical_or_expression logical_and_expression
+%type <string> equality_expression relation_expression
 %type <string> add_expression mul_expression
 %type <string> unary_expression postfix_expression primary_expression
+%type <string> assign_op
 %type <string> id_var
 
 /* Yacc will start at this nonterminal */
@@ -114,58 +119,117 @@ global_declaration
 ;
 
 func_def 
-    : declaration_specs declarator declaration_list def_func compound_stat	{	int lookup_num;
-							                  						  			char *tmp = strdup($2);
-									  											char *id = strtok(tmp,"|");
-								          										lookup_num = lookup_symbol(id);
-									  											if(lookup_num < 0){
-									      											insert_symbol($2, "function", $1, 0);
-									  											}
-									  											else if(lookup_num == 2){
-									      											Change_Table_Flag(id);
-									  											}
-									  											else{
-									      											error_num = 3;
-								 	      											if(error_msg == NULL)
-									          											error_msg = strdup("Redeclared function ");
-									      											else
-									          											strcpy(error_msg,"Redeclared function ");
-									      											strcat(error_msg, id);
-									  											}
-																				fprintf(file, ".end method\n");
-																			}
-
-    | declaration_specs declarator def_func compound_stat	{	int lookup_num;
-							                  					char *tmp = strdup($2);
-									  							char *id = strtok(tmp,"|");
-								          						lookup_num = lookup_symbol(id);
-									  							if(lookup_num < 0){
-									      							insert_symbol($2, "function", $1, 0);
-									  							}
-									  							else if(lookup_num == 2){
-									      							Change_Table_Flag(id);
-									  							}
-									  							else{
-									      							error_num = 3;
-								 	      							if(error_msg == NULL)
-									          							error_msg = strdup("Redeclared function ");
-									      							else
-									          							strcpy(error_msg,"Redeclared function ");
-									      							strcat(error_msg, id);
-									  							}
-																fprintf(file, ".end method\n");
+    : declaration_specs declarator declaration_list {	if(!strcmp(table_head -> name, "main"))
+															fprintf(file, ".method public static main([Ljava/lang/String;)V\n");
+														else{
+															char *str = strdup($2),*tmp;
+															fprintf(file,".method public static %s(",strtok(str,"|"));
+															while((tmp = strtok(NULL,", ")) != NULL){
+																if(!strcmp(tmp,"int"))
+																	fprintf(file,"I");
+																else if(!strcmp(tmp,"float"))
+																	fprintf(file,"F");
+																else if(!strcmp(tmp,"bool"))
+																	fprintf(file,"Z");
+																else if(!strcmp(tmp,"string"))
+																	fprintf(file,"Ljava/lang/String");	
 															}
+
+															tmp = strdup($1);
+															if(!strcmp(tmp,"int"))
+																fprintf(file,")I\n");
+															else if(!strcmp(tmp,"float"))
+																fprintf(file,")F\n");
+															else if(!strcmp(tmp,"bool"))
+																fprintf(file,")Z\n");
+															else if(!strcmp(tmp,"string"))
+																fprintf(file,")Ljava/lang/String\n");	
+															else if(!strcmp(tmp,"void"))
+																fprintf(file,")V\n");
+
+														}
+														fprintf(file,".limit stack 50\n.limit locals 50\n");
+
+													} compound_stat	{	
+
+														int lookup_num;
+	                  						  			char *tmp = strdup($2);
+			  											char *id = strtok(tmp,"|");
+		          										lookup_num = lookup_symbol(id);
+			  											if(lookup_num < 0){
+			      											insert_symbol($2, "function", $1, 0);
+			  											}
+			  											else if(lookup_num == 2){
+			      											Change_Table_Flag(id);
+			  											}
+			  											else{
+			      											error_num = 3;
+		 	      											if(error_msg == NULL)
+			          											error_msg = strdup("Redeclared function ");
+			      											else
+			          											strcpy(error_msg,"Redeclared function ");
+			      											strcat(error_msg, id);
+			  											}
+														fprintf(file, ".end method\n");
+													}
+
+    | declaration_specs declarator	{	if(!strcmp(table_head -> name, "main"))
+											fprintf(file, ".method public static main([Ljava/lang/String;)V\n");
+										else{
+											char *str = strdup($2),*tmp;
+											fprintf(file,".method public static %s(",strtok(str,"|"));
+											while((tmp = strtok(NULL,", ")) != NULL){
+												if(!strcmp(tmp,"int"))
+													fprintf(file,"I");
+												else if(!strcmp(tmp,"float"))
+													fprintf(file,"F");
+												else if(!strcmp(tmp,"bool"))
+													fprintf(file,"Z");
+												else if(!strcmp(tmp,"string"))
+													fprintf(file,"Ljava/lang/String");	
+											}
+
+											tmp = strdup($1);
+											if(!strcmp(tmp,"int"))
+												fprintf(file,")I\n");
+											else if(!strcmp(tmp,"float"))
+												fprintf(file,")F\n");
+											else if(!strcmp(tmp,"bool"))
+												fprintf(file,")Z\n");
+											else if(!strcmp(tmp,"string"))
+												fprintf(file,")Ljava/lang/String\n");	
+											else if(!strcmp(tmp,"void"))
+												fprintf(file,")V\n");
+
+										}
+										fprintf(file,".limit stack 50\n.limit locals 50\n");
+
+									} compound_stat	{	
+
+										int lookup_num;
+							            char *tmp = strdup($2);
+									  	char *id = strtok(tmp,"|");
+								        lookup_num = lookup_symbol(id);
+									  	if(lookup_num < 0){
+									    	insert_symbol($2, "function", $1, 0);
+									  	}
+									  	else if(lookup_num == 2){
+									    	Change_Table_Flag(id);
+									  	}
+									  	else{
+									    	error_num = 3;
+								 	    	if(error_msg == NULL)
+									    		error_msg = strdup("Redeclared function ");
+									    	else
+									    		strcpy(error_msg,"Redeclared function ");
+									    	strcat(error_msg, id);
+									  	}
+										fprintf(file, ".end method\n");
+									}
+
     | declarator declaration_list compound_stat
     | declarator compound_stat
 ;
-
-def_func :	{
-				if(!strcmp(table_head -> name, "main"))
-					fprintf(file, ".method public static main([Ljava/lang/String;)V\n");
-				else
-					fprintf(file, "define func\n");
-				fprintf(file,".limit stack 50\n.limit locals 50\n");
-			}
 
 declaration_specs 
     : type						{$$ = $1;}
@@ -249,13 +313,17 @@ declaration
 																		else{ // With Initialize
 
 																			if((!strcmp($1,"int")) || (!strcmp($1,"bool"))){
-																				if(!strcmp(table_head -> value_type,"F"))
+																				if(!strcmp(table_head -> value_type,"F")){
+																					fprintf(file,"    f2i\n");
 																					table_head -> int_const = table_head -> float_const;
+																				}
 																				fprintf(file, ".field public static %s %s = %d\n",$2,data_type,table_head -> int_const);
 																			}
 																			else if(!strcmp($1,"float")){
-																				if(!strcmp(table_head -> value_type,"I"))
+																				if(!strcmp(table_head -> value_type,"I")){
+																					fprintf(file,"    i2f\n");
 																					table_head -> float_const = table_head -> int_const;
+																				}
 																				fprintf(file, ".field public static %s %s = %f\n",$2,data_type,table_head -> float_const);
 																			}
 																			else if(!strcmp($1,"string"))
@@ -278,13 +346,17 @@ declaration
 																		else{ // With Initialize
 
 																			if((!strcmp($1,"int")) || (!strcmp($1,"bool"))){
-																				if(!strcmp(table_head -> value_type,"F"))
+																				if(!strcmp(table_head -> value_type,"F")){
+																					fprintf(file,"    f2i\n");
 																					table_head -> int_const = table_head -> float_const;
+																				}
 																				fprintf(file, "    istore %d\n",local_cnt++);
 																			}
 																			else if(!strcmp($1,"float")){
-																				if(!strcmp(table_head -> value_type,"I"))
+																				if(!strcmp(table_head -> value_type,"I")){
+																					fprintf(file,"    i2f\n");
 																					table_head -> float_const = table_head -> int_const;
+																				}
 																				fprintf(file, "    fstore %d\n",local_cnt++);
 																			}
 																			else if(!strcmp($1,"string"))
@@ -363,7 +435,7 @@ print_stat
 														else if(!strcmp(table_head -> value_type,"F"))
 															fprintf(file,"    ldc %f\n",table_head -> float_const);
 														else if(!strcmp(table_head -> value_type,"Ljava/lang/String"))
-															fprintf(file,"    ldc %s\n",table_head -> str_const);
+															fprintf(file,"    ldc \"%s\"\n",table_head -> str_const);
 
 														fprintf(file,"    getstatic java/lang/System/out Ljava/io/PrintStream;\n");
 														fprintf(file,"    swap\n");
@@ -408,30 +480,88 @@ expression
 ;
 
 assign_expression 
-    : logical_or_expression
-    | unary_expression {id_flag = 0;} assign_op assign_expression	{ // For casting 
-																		strcpy(id_buff,$1); 
-												  					} store_var
+    : logical_or_expression	{$$ = $1;}
+    | unary_expression {id_flag = 0;} assign_op {	if(strcmp($3,"=")){
+	
+														Entry *entry = Get_Entry($1);
+														if(entry -> scope_level == 0){
+															if(!strcmp(entry -> data_type,"int"))
+																fprintf(file,"    getstatic compiler_hw3/%s I\n",entry -> name);
+															else if(!strcmp(entry -> data_type,"float"))
+																fprintf(file,"    getstatic compiler_hw3/%s F\n",entry -> name);
+														}
+														else if(!strcmp(entry -> data_type,"float"))
+															fprintf(file,"    fload %d\n",entry -> reg_num);
+														else
+															fprintf(file,"    iload %d\n",entry -> reg_num);
+
+													}
+
+												} assign_expression { // For expression computation and casting
+
+													strcpy(id_buff,$1);
+													if(!strcmp($3,"+=")){
+    													Check_Casting($1,$5,cast_type);
+														if(!strcmp(cast_type,"I"))
+															fprintf(file,"    iadd\n");
+														else
+															fprintf(file,"    fadd\n");
+													}
+													else if(!strcmp($3,"-=")){
+    													Check_Casting($1,$5,cast_type);
+														if(!strcmp(cast_type,"I"))
+															fprintf(file,"    isub\n");
+														else
+															fprintf(file,"    fsub\n");
+													}
+													else if(!strcmp($3,"*=")){
+    													Check_Casting($1,$5,cast_type);
+														if(!strcmp(cast_type,"I"))
+															fprintf(file,"    imul\n");
+														else
+															fprintf(file,"    fmul\n");
+													}
+													else if(!strcmp($3,"/=")){
+    													Check_Casting($1,$5,cast_type);
+														if(!strcmp(cast_type,"I"))
+															fprintf(file,"    idiv\n");
+														else
+															fprintf(file,"    fdiv\n");
+													}
+													else if(!strcmp($3,"%=")){
+    													Check_Casting($1,$5,cast_type);
+														if(!strcmp(cast_type,"I"))
+															fprintf(file,"    imod\n");
+														//else
+															//erroe
+													}
+
+													if(!strcmp($3,"="))
+														Casting($1,$5);
+													else
+														Casting($1,cast_type);
+
+												} store_var
 ;
 
 logical_or_expression 
-    : logical_and_expression
+    : logical_and_expression							{$$ = $1;}
     | logical_or_expression OR logical_and_expression
 ;
 
 logical_and_expression 
-    : equality_expression
+    : equality_expression								{$$ = $1;}
     | logical_and_expression AND equality_expression
 ;
 
 equality_expression 
-    : relation_expression
+    : relation_expression							{$$ = $1;}
     | equality_expression EQ relation_expression
     | equality_expression NE relation_expression
 ;
 
 relation_expression 
-    : add_expression
+    : add_expression							{$$ = $1;}
     | relation_expression LT add_expression
     | relation_expression MT add_expression
     | relation_expression LTE add_expression
@@ -440,21 +570,57 @@ relation_expression
 
 add_expression 
     : mul_expression					{ $$ = $1; }
-    | add_expression ADD mul_expression	{ $$ = strdup(Check_Casting($1,$3)); if(!strcmp($$,"I")){fprintf(file,"    iadd\n");}else{fprintf(file,"    fadd\n");} }
-    | add_expression SUB mul_expression	{ $$ = strdup(Check_Casting($1,$3)); if(!strcmp($$,"I")){fprintf(file,"    isub\n");}else{fprintf(file,"    fsub\n");} }
+    | add_expression ADD mul_expression	{	Check_Casting($1,$3,cast_type);
+											strcpy($$,cast_type);
+											if(!strcmp($$,"I")){fprintf(file,"    iadd\n");}
+											else{fprintf(file,"    fadd\n");} 
+										}
+    | add_expression SUB mul_expression	{	Check_Casting($1,$3,cast_type);
+											strcpy($$,cast_type);
+											if(!strcmp($$,"I")){fprintf(file,"    isub\n");}
+											else{fprintf(file,"    fsub\n");} 
+										}
 ;
 
 mul_expression 
-    : unary_expression								{	if(id_flag){strcpy(id_buff,$1);} } load_const load_var { $$ = $1; }
-    | mul_expression MUL unary_expression			{	if(id_flag){strcpy(id_buff,$3);} } load_const load_var { $$ = strdup(Check_Casting($1,$3)); if(!strcmp($$,"I")){fprintf(file,"    imul\n");}else{fprintf(file,"    fmul\n");} }
-    | mul_expression DIV unary_expression			{	if(id_flag){strcpy(id_buff,$3);} } load_const load_var { $$ = strdup(Check_Casting($1,$3)); if(!strcmp($$,"I")){fprintf(file,"    idiv\n");}else{fprintf(file,"    fdiv\n");} }
-    | mul_expression MOD unary_expression			{	if(id_flag){strcpy(id_buff,$3);} } load_const load_var { $$ = strdup(Check_Casting($1,$3)); if(!strcmp($$,"I")){fprintf(file,"    imod\n");}else{/*error*/} }
+    : unary_expression								{	if(id_flag){strcpy(id_buff,$1);} } load_const load_var	{ $$ = $1; }
+    | mul_expression MUL unary_expression			{	if(id_flag){strcpy(id_buff,$3);} } load_const load_var	{ 	Check_Casting($1,$3,cast_type);
+																													$$ = strdup(cast_type);
+																													if(!strcmp($$,"I")){fprintf(file,"    imul\n");}
+																													else{fprintf(file,"    fmul\n");} 
+																												}
+    | mul_expression DIV unary_expression			{	if(id_flag){strcpy(id_buff,$3);} } load_const load_var	{	Check_Casting($1,$3,cast_type);
+																													$$ = strdup(cast_type);
+																													if(!strcmp($$,"I")){fprintf(file,"    idiv\n");}
+																													else{fprintf(file,"    fdiv\n");} 
+																												}
+    | mul_expression MOD unary_expression			{	if(id_flag){strcpy(id_buff,$3);} } load_const load_var	{	Check_Casting($1,$3,cast_type);
+																													$$ = strdup(cast_type);
+																													if(!strcmp($$,"I")){fprintf(file,"    imod\n");}
+																													else{/*error*/} 
+																												}
 ;
 
 unary_expression 
     : postfix_expression							{	$$ = $1; }
-    | INC unary_expression	 						{	strcpy(id_buff,$2); op_flag = 1; } load_var { $$ = $2; }
-    | DEC unary_expression 							{	strcpy(id_buff,$2); op_flag = 1; } load_var { $$ = $2; }
+    | INC unary_expression	 						{	strcpy(id_buff,$2); op_flag = 1; } load_var {	fprintf(file,"    ldc 1\n");
+																										if(!strcmp(table_head -> value_type,"I"))
+																											fprintf(file,"    iadd\n");
+																										else{
+																											fprintf(file,"    i2f\n");
+																											fprintf(file,"    fadd\n");
+																										}
+																									} store_var { $$ = $2; }
+
+    | DEC unary_expression 							{	strcpy(id_buff,$2); op_flag = 1; } load_var {	fprintf(file,"    ldc 1\n");
+																										if(!strcmp(table_head -> value_type,"I"))
+																											fprintf(file,"    isub\n");
+																										else{
+																											fprintf(file,"    i2f\n");
+																											fprintf(file,"    fsub\n");
+																										}
+																									} store_var { $$ = $2; }
+
     | unary_op unary_expression						{	if(id_flag){strcpy(id_buff,$2);} } load_const load_var { $$ = $2; }
 ;
 
@@ -482,8 +648,27 @@ postfix_expression
 							  							}
 														id_flag = 1;
 													}
-    | postfix_expression INC 						{	strcpy(id_buff,$1); }	load_var	{$$ = $1;}
-    | postfix_expression DEC 						{	strcpy(id_buff,$1); }	load_var	{$$ = $1;}
+    | postfix_expression INC 						{	strcpy(id_buff,$1); }	load_var	{	op_flag = 1;
+																								fprintf(file,"    ldc 1\n");
+																								if(!strcmp(table_head -> value_type,"I"))
+																									fprintf(file,"    iadd\n");
+																								else{
+																									fprintf(file,"    i2f\n");
+																									fprintf(file,"    fadd\n");
+																								}
+																								
+																							} store_var {$$ = $1; }
+ 
+    | postfix_expression DEC 						{	strcpy(id_buff,$1); }	load_var	{	op_flag = 1;
+																								fprintf(file,"    ldc 1\n");
+																								if(!strcmp(table_head -> value_type,"I"))
+																									fprintf(file,"    isub\n");
+																								else{
+																									fprintf(file,"    i2f\n");
+																									fprintf(file,"    fsub\n");
+																								}
+
+																							} store_var {$$ = $1; }
 ;
 
 load_const:	{	if(!id_flag && !op_flag && (table_head -> scope_level > 0)){
@@ -541,7 +726,7 @@ store_var:	{
 				if(entry -> scope_level == 0)
 					fprintf(file,"    putstatic compiler_hw3/%s %s\n",entry -> name,table_head -> value_type);
 				else if(!strcmp(entry -> data_type,"float"))
-					fprintf(file,"    tfstore %d\n",entry -> reg_num);
+					fprintf(file,"    fstore %d\n",entry -> reg_num);
 				else
 					fprintf(file,"    istore %d\n",entry -> reg_num);
 			}
@@ -575,7 +760,7 @@ primary_expression
 			}
     | I_CONST	{strcpy(table_head -> value_type, "I"); table_head -> int_const = atoi(yytext); id_flag = 0; }
     | F_CONST	{strcpy(table_head -> value_type, "F"); sscanf(yytext,"%f",&(table_head -> float_const)); id_flag = 0; }
-    | QUATA STR_CONST {strcpy(table_head -> value_type, "Ljava/lang/String"); strcpy(table_head -> str_const, yytext); id_flag = 0; } QUATA
+    | QUATA STR_CONST { strcpy(table_head -> value_type, "Ljava/lang/String"); strcpy(table_head -> str_const, yytext); id_flag = 0; } QUATA
     | TRUE		{strcpy(table_head -> value_type, "Z"); table_head -> int_const = 1; id_flag = 0; }
     | FALSE		{strcpy(table_head -> value_type, "Z"); table_head -> int_const = 0; id_flag = 0; }
     | LB expression RB	{;}
@@ -621,12 +806,12 @@ init_list
 ;
 
 assign_op 
-    : ASGN
-    | ADDASGN
-    | SUBASGN
-    | MULASGN
-    | DIVASGN
-    | MODASGN
+    : ASGN		{$$ = strdup(yytext); }
+    | ADDASGN	{$$ = strdup(yytext); }
+    | SUBASGN	{$$ = strdup(yytext); }
+    | MULASGN	{$$ = strdup(yytext); }
+    | DIVASGN	{$$ = strdup(yytext); }
+    | MODASGN	{$$ = strdup(yytext); }
 ;
 
 id_list 
@@ -665,6 +850,7 @@ int main(int argc, char** argv)
 	id_buff = strdup("");
 	id_flag = 0;
     syntax_error_flag = 0;
+	cast_type = strdup("");
 
 	file = fopen("compiler_hw3.j","w");
 
@@ -873,7 +1059,7 @@ Entry *Remove_Entry(){
 
 }
 
-char *Check_Casting(char *id1,char *id2){
+void Casting(char *id1,char *id2){
 
 	Entry *e1 = Get_Entry(id1);
 	Entry *e2 = Get_Entry(id2);
@@ -896,21 +1082,56 @@ char *Check_Casting(char *id1,char *id2){
 	}
 	else
 		type2 = strdup(e2 -> data_type);
-
+	
 	if(!strcmp(type1,"float") && (!strcmp(type2,"int"))){
-		fprintf(file,"    swap\n");
 		fprintf(file,"    i2f\n");
-		str = strdup("F");
-		return str;
 	}
 	else if(!strcmp(type1,"int") && (!strcmp(type2,"float"))){
-		fprintf(file,"    i2f\n");
-		str = strdup("F");
-		return str;
+		fprintf(file,"    f2i\n");
 	}
 
-	str = strdup("I");
-	return str;
+	return;
+
+}
+
+void *Check_Casting(char *id1,char *id2,char *type){
+
+	Entry *e1 = Get_Entry(id1);
+	Entry *e2 = Get_Entry(id2);
+	char *type1,*type2;
+
+	if(e1 == NULL){
+		if(!strcmp(id1,"F"))
+			type1 = strdup("float");
+		else
+			type1 = strdup("int");
+	}
+	else
+		type1 = strdup(e1 -> data_type);
+
+	if(e2 == NULL){
+		if(!strcmp(id2,"F"))
+			type2 = strdup("float");
+		else
+			type2 = strdup("int");
+	}
+	else
+		type2 = strdup(e2 -> data_type);
+
+	if(!strcmp(type1,"float") && (!strcmp(type2,"int"))){
+		fprintf(file,"    i2f\n");
+		strcpy(type,"F");
+		return;
+	}
+	else if(!strcmp(type1,"int") && (!strcmp(type2,"float"))){
+		fprintf(file,"    swap\n");
+		fprintf(file,"    i2f\n");
+		strcpy(type,"F");
+		return;
+	}
+
+	strcpy(type,"I");
+	return;
 
 }
 
